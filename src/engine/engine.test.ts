@@ -115,6 +115,24 @@ async function drawBalls(gameId: string, balls: readonly number[]): Promise<void
   }
 }
 
+// Random grids share column ranges, so one card's balls can land on another's. These never do.
+async function deal(gameId: string, players: readonly Player[]): Promise<Player[]> {
+  return Promise.all(
+    players.map(async (player, offset) => {
+      const grid = Array.from({ length: 25 }, (_, index) =>
+        index === 12 ? FREE : (index % 5) * 15 + offset * 5 + Math.floor(index / 5) + 1,
+      );
+
+      await harness.db.execute(
+        sql`UPDATE card SET grid = ${`{${grid.join(',')}}`}::smallint[]
+            WHERE game_id = ${gameId} AND number = ${player.cardNumber}`,
+      );
+
+      return { ...player, grid };
+    }),
+  );
+}
+
 function row(grid: readonly number[], index: number): number[] {
   return grid.slice(index * 5, index * 5 + 5).filter((value) => value !== FREE);
 }
@@ -418,7 +436,7 @@ describe('claiming BINGO', () => {
 describe('the ranking', () => {
   it('lists cards by name and how close each is, the one that can claim first', async () => {
     const { game, players } = await table(3, { line: 1, full: 1 });
-    const [ana, beto] = players;
+    const [ana, beto] = await deal(game.id, players);
 
     await drawBalls(game.id, [...row(ana!.grid, 0), ...row(beto!.grid, 0).slice(0, 3)]);
 
