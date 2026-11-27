@@ -1,0 +1,33 @@
+import 'reflect-metadata';
+
+import { NestFactory } from '@nestjs/core';
+import { Logger } from 'nestjs-pino';
+
+import { AppModule } from './app.module';
+import { CONFIG, type Config } from './config';
+import { RealtimeAdapter } from './realtime/realtime.adapter';
+
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const config = app.get<Config>(CONFIG);
+
+  app.useLogger(app.get(Logger));
+
+  app.setGlobalPrefix('api', { exclude: ['health', 'metrics'] });
+
+  app.enableCors({
+    origin: config.BINGYX_CORS_ORIGINS,
+    credentials: false,
+  });
+
+  app.useWebSocketAdapter(new RealtimeAdapter(app, config.BINGYX_CORS_ORIGINS));
+
+  app.enableShutdownHooks();
+
+  await app.listen(config.HTTP_PORT, config.HTTP_HOST);
+}
+
+bootstrap().catch((error: unknown) => {
+  console.error(error instanceof Error ? error.stack : error);
+  process.exitCode = 1;
+});

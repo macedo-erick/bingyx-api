@@ -1,0 +1,101 @@
+name: bingyx
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: bingyx-postgres
+    environment:
+      POSTGRES_DB: bingyx
+      POSTGRES_USER: bingyx
+      POSTGRES_PASSWORD: bingyx
+    ports:
+      - '127.0.0.1:5436:5432'
+    volumes:
+      - bingyx-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bingyx -d bingyx']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: bingyx-keycloak
+    command: ['start-dev', '--http-relative-path=/auth', '--import-realm']
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: 'true'
+      KC_HTTP_MANAGEMENT_RELATIVE_PATH: /
+      BINGYX_UI_BASE_URL: http://localhost:4203
+      BINGYX_UI_ORIGIN: http://localhost:4203
+    ports:
+      - '127.0.0.1:8098:8080'
+    volumes:
+      - ../../auth/realms/bingyx.json:/opt/keycloak/data/import/bingyx.json:ro
+      - ../../auth/themes/bingyx:/opt/keycloak/themes/bingyx:ro
+      - bingyx-keycloak-data:/opt/keycloak/data
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'exec 3<>/dev/tcp/127.0.0.1/9000; echo -e "GET /health/ready HTTP/1.1\r\nhost: localhost\r\nConnection: close\r\n\r\n" >&3; grep -q "200 OK" <&3',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 45s
+
+  migrate:
+    build:
+      context: .
+      target: dev
+    container_name: bingyx-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./src:/app/src
+      - ./drizzle:/app/drizzle
+    command: ['yarn', 'db:migrate:dev']
+    restart: 'no'
+
+  api:
+    build:
+      context: .
+      target: dev
+    container_name: bingyx-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      HTTP_HOST: 0.0.0.0
+      HTTP_PORT: '8080'
+      KEYCLOAK_ISSUER_URI: http://localhost:8098/auth/realms/bingyx
+      KEYCLOAK_JWKS_URI: http://keycloak:8080/auth/realms/bingyx/protocol/openid-connect/certs
+      BINGYX_CORS_ORIGINS: http://localhost:4203
+      LOG_PRETTY: 'false'
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - '127.0.0.1:8097:8080'
+    volumes:
+      - ./src:/app/src
+      - ./drizzle:/app/drizzle
+
+volumes:
+  bingyx-postgres-data:
+  bingyx-keycloak-data:
